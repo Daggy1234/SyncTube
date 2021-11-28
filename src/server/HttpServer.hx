@@ -50,7 +50,7 @@ class HttpServer {
 	}
 
 	public static function serveFiles(req:IncomingMessage, res:ServerResponse):Void {
-		var url = decodeURI(req.url);
+		var url = safeDecodeURI(req.url);
 		if (url == "/") url = "/index.html";
 		var filePath = dir + url;
 		final ext = Path.extension(filePath).toLowerCase();
@@ -74,7 +74,7 @@ class HttpServer {
 		}
 
 		if (url.startsWith("/proxy")) {
-			if (!proxyUrl(req, res)) res.end('Cannot proxy ${req.url}');
+			if (!proxyUrl(req, res)) res.end('Proxy error: ${req.url}');
 			return;
 		}
 
@@ -123,12 +123,12 @@ class HttpServer {
 		var range:String = req.headers["range"];
 		if (range == null) range = "bytes=0-";
 		final ranges = ~/[-=]/g.split(range);
-		var start = Std.parseInt(ranges[1]);
-		if (start == null) start = 0;
+		var start = Std.parseFloat(ranges[1]);
+		if (Utils.isOutOfRange(start, 0, videoSize - 1)) start = 0;
 		final CHUNK_SIZE = 1024 * 1024 * 5; // 5 MB
-		var end = Std.parseInt(ranges[2]);
-		if (end == null) end = start + CHUNK_SIZE;
-		end = Std.int(Math.min(end, videoSize - 1));
+		var end = Std.parseFloat(ranges[2]);
+		if (Math.isNaN(end)) end = start + CHUNK_SIZE;
+		if (Utils.isOutOfRange(end, start, videoSize - 1)) end = videoSize - 1;
 		final contentLength = end - start + 1;
 
 		res.setHeader("Content-Range", 'bytes ${start}-${end}/${videoSize}');
@@ -136,7 +136,7 @@ class HttpServer {
 		// HTTP Status 206 for Partial Content
 		res.statusCode = 206;
 		// create video read stream for this particular chunk
-		final videoStream = Fs.createReadStream(filePath, {start: start, end: end});
+		final videoStream = Fs.createReadStream(filePath, {start: cast start, end: cast end});
 		// stream the video chunk to the client
 		videoStream.pipe(res);
 		return true;
@@ -167,7 +167,7 @@ class HttpServer {
 			if (url == null) return false;
 			final proxy2 = proxyRequest(url, req, res, proxyReq -> false);
 			if (proxy2 == null) {
-				res.end('Proxy error for redirected $url');
+				res.end('Proxy error: multiple redirects for url $url');
 				return true;
 			}
 			req.pipe(proxy2, {end: true});
@@ -183,7 +183,7 @@ class HttpServer {
 		fn:(req:IncomingMessage) -> Bool
 	):Null<ClientRequest> {
 		final url = try {
-			new URL(decodeURI(url));
+			new URL(safeDecodeURI(url));
 		} catch (e) return null;
 		if (url.host == req.headers["host"]) return null;
 		final options = {
@@ -200,7 +200,7 @@ class HttpServer {
 			proxyReq.pipe(res, {end: true});
 		});
 		proxy.on("error", err -> {
-			res.end('Proxy error for ${url.href}');
+			res.end('Proxy error: ${url.href}');
 		});
 		return proxy;
 	}
@@ -214,6 +214,16 @@ class HttpServer {
 		final contentType = mimeTypes[ext];
 		if (contentType == null) return "application/octet-stream";
 		return contentType;
+	}
+
+	static final ctrlCharacters = ~/[\u0000-\u001F\u007F-\u009F\u2000-\u200D\uFEFF]/g;
+
+	static function safeDecodeURI(data:String):String {
+		try {
+			data = decodeURI(data);
+		} catch (err) {}
+		data = ctrlCharacters.replace(data, "");
+		return data;
 	}
 
 	static inline function decodeURI(data:String):String {

@@ -24,15 +24,21 @@ using ClientTools;
 using Lambda;
 using StringTools;
 
+private typedef MainOptions = {
+	loadState:Bool
+}
+
 class Main {
 	static inline var VIDEO_START_MAX_DELAY = 3000;
 	static inline var VIDEO_SKIP_DELAY = 1000;
+	static inline var FLASHBACK_DIST = 30;
 
 	final rootDir = '$__dirname/..';
 
 	public final logsDir:String;
 	public final config:Config;
 
+	final isNoState:Bool;
 	final verbose:Bool;
 	final statePath:String;
 	var wss:WSServer;
@@ -48,14 +54,15 @@ class Main {
 	final videoTimer = new VideoTimer();
 	final messages:Array<Message> = [];
 	final logger:Logger;
-	var isPlaylistOpen = true;
-	var itemPos = 0;
 
 	static function main():Void {
-		new Main();
+		new Main({
+			loadState: true
+		});
 	}
 
-	function new() {
+	function new(opts:MainOptions) {
+		isNoState = !opts.loadState;
 		verbose = Sys.args().has("--verbose");
 		statePath = '$rootDir/user/state.json';
 		logsDir = '$rootDir/user/logs';
@@ -90,7 +97,7 @@ class Main {
 		final envPort = (process.env : Dynamic).PORT;
 		if (envPort != null) port = envPort;
 
-		var attempts = 5;
+		var attempts = isNoState ? 500 : 5;
 		function preparePort():Void {
 			Utils.isPortFree(port, isFree -> {
 				if (!isFree && attempts > 0) {
@@ -108,7 +115,7 @@ class Main {
 
 	function runServer():Void {
 		trace('Local: http://$localIp:$port');
-		Utils.getGlobalIp(ip -> {
+		if (!isNoState) Utils.getGlobalIp(ip -> {
 			globalIp = ip;
 			trace('Global: http://$globalIp:$port');
 		});
@@ -122,7 +129,7 @@ class Main {
 		});
 		wss = new WSServer({server: server});
 		wss.on("connection", onConnect);
-		server.listen(port);
+		server.listen(port, onServerInited);
 
 		new Timer(25000).run = () -> {
 			for (client in clients) {
@@ -135,6 +142,8 @@ class Main {
 			}
 		};
 	}
+
+	dynamic function onServerInited():Void {};
 
 	public function exit():Void {
 		saveState();
@@ -171,6 +180,7 @@ class Main {
 
 	function getUserConfig():Config {
 		final config:Config = Json.parse(File.getContent('$rootDir/default-config.json'));
+		if (isNoState) return config;
 		final customPath = '$rootDir/user/config.json';
 		if (!FileSystem.exists(customPath)) return config;
 		final customConfig:Config = Json.parse(File.getContent(customPath));
@@ -195,7 +205,7 @@ class Main {
 
 	function loadUsers():UserList {
 		final customPath = '$rootDir/user/users.json';
-		if (!FileSystem.exists(customPath)) return {
+		if (isNoState || !FileSystem.exists(customPath)) return {
 			admins: [],
 			bans: []
 		};
@@ -226,32 +236,33 @@ class Main {
 
 	function saveState():Void {
 		trace("Saving state...");
-		final data:ServerState = {
-			videoList: videoList,
-			isPlaylistOpen: isPlaylistOpen,
-			itemPos: itemPos,
+		final json = Json.stringify(getCurrentState(), "\t");
+		File.saveContent(statePath, json);
+		writeUsers(userList);
+	}
+
+	function getCurrentState():ServerState {
+		return {
+			videoList: videoList.getItems(),
+			isPlaylistOpen: videoList.isOpen,
+			itemPos: videoList.pos,
 			messages: messages,
 			timer: {
 				time: videoTimer.getTime(),
 				paused: videoTimer.isPaused()
 			}
 		}
-		final json = Json.stringify(data, "\t");
-		File.saveContent(statePath, json);
-		writeUsers(userList);
 	}
 
 	function loadState():Void {
+		if (isNoState) return;
 		if (!FileSystem.exists(statePath)) return;
 		trace("Loading state...");
 		final data:ServerState = Json.parse(File.getContent(statePath));
-		videoList.resize(0);
+		videoList.setItems(data.videoList);
 		messages.resize(0);
-		for (item in data.videoList) {
-			videoList.push(item);
-		}
-		isPlaylistOpen = data.isPlaylistOpen;
-		itemPos = data.itemPos;
+		videoList.isOpen = data.isPlaylistOpen;
+		videoList.setPos(data.itemPos);
 		for (message in data.messages) {
 			messages.push(message);
 		}
@@ -286,11 +297,10 @@ class Main {
 
 	function clientIp(req:IncomingMessage):String {
 		// Heroku uses internal proxy, so header cannot be spoofed
-		if (isHeroku) {
-			var forwarded:String = req.headers["x-forwarded-for"];
-			forwarded = forwarded.split(",")[0].trim();
+		if (config.allowProxyIps || isHeroku) {
+			final forwarded:String = req.headers["x-forwarded-for"];
 			if (forwarded == null || forwarded.length == 0) return req.socket.remoteAddress;
-			return forwarded;
+			return forwarded.split(",")[0].trim();
 		}
 		return req.socket.remoteAddress;
 	}
@@ -347,7 +357,7 @@ class Main {
 		final ip = clientIp(req);
 		final id = freeIds.length > 0 ? freeIds.shift() : clients.length;
 		final name = 'Guest ${id + 1}';
-		trace('$name connected ($ip)');
+		trace(Date.now().toString(), '$name connected ($ip)');
 		final isAdmin = config.localAdmins && req.socket.localAddress == ip;
 		final client = new Client(ws, req, id, name, 0);
 		client.isAdmin = isAdmin;
@@ -379,9 +389,12 @@ class Main {
 
 	function noTypeObj(data:WsEvent):Bool {
 		if (data.type == GetTime) return false;
+		if (data.type == Flashback) return false;
 		if (data.type == TogglePlaylistLock) return false;
 		if (data.type == UpdatePlaylist) return false;
 		if (data.type == Logout) return false;
+		if (data.type == Dump) return false;
+		// check if request has same field as type value
 		final t:String = cast data.type;
 		final t = t.charAt(0).toLowerCase() + t.substr(1);
 		return js.Syntax.strictEq(Reflect.field(data, t), null);
@@ -392,7 +405,7 @@ class Main {
 			clientName: client.name,
 			clientGroup: client.group.toInt(),
 			event: data,
-			time: Date.now().getTime()
+			time: Date.now().toString()
 		});
 		switch (data.type) {
 			case Connected:
@@ -410,9 +423,9 @@ class Main {
 						isUnknownClient: true,
 						clientName: client.name,
 						clients: clientList(),
-						videoList: videoList,
-						isPlaylistOpen: isPlaylistOpen,
-						itemPos: itemPos,
+						videoList: videoList.getItems(),
+						isPlaylistOpen: videoList.isOpen,
+						itemPos: videoList.pos,
 						globalIp: globalIp
 					}
 				});
@@ -420,7 +433,7 @@ class Main {
 
 			case Disconnected:
 				if (!internal) return;
-				trace('Client ${client.name} disconnected');
+				trace(Date.now().toString(), 'Client ${client.name} disconnected');
 				Utils.sortedPush(freeIds, client.id);
 				clients.remove(client);
 				sendClientList();
@@ -471,6 +484,17 @@ class Main {
 				serverMessage(client, '${bannedClient.name} ($ip) has been banned.');
 				sendClientList();
 
+			case KickClient:
+				if (!checkPermission(client, BanClientPerm)) return;
+				final name = data.kickClient.name;
+				final kickedClient = clients.getByName(name);
+				if (kickedClient == null) return;
+				if (client.name != name && kickedClient.isAdmin) {
+					serverMessage(client, "adminsCannotBeBannedError");
+					return;
+				}
+				send(kickedClient, {type: KickClient});
+
 			case Login:
 				final name = data.login.clientName.trim();
 				final lcName = name.toLowerCase();
@@ -496,6 +520,7 @@ class Main {
 						return;
 					}
 				}
+				trace(Date.now().toString(), 'Client ${client.name} logged as $name');
 				client.name = name;
 				client.isUser = true;
 				checkBan(client);
@@ -516,6 +541,7 @@ class Main {
 				final id = clients.indexOf(client) + 1;
 				client.name = 'Guest $id';
 				client.isUser = false;
+				trace(Date.now().toString(), 'Client $oldName logout to ${client.name}');
 				send(client, {
 					type: data.type,
 					logout: {
@@ -543,7 +569,7 @@ class Main {
 			case ServerMessage:
 			case AddVideo:
 				if (!checkPermission(client, AddVideoPerm)) return;
-				if (!isPlaylistOpen) {
+				if (!videoList.isOpen) {
 					if (!checkPermission(client, LockPlaylistPerm)) return;
 				}
 				if (config.totalVideoLimit != 0 && videoList.length >= config.totalVideoLimit) {
@@ -568,7 +594,7 @@ class Main {
 					serverMessage(client, "videoAlreadyExistsError");
 					return;
 				}
-				videoList.addItem(item, data.addVideo.atEnd, itemPos);
+				videoList.addItem(item, data.addVideo.atEnd);
 				broadcast(data);
 				// Initial timer start if VideoLoaded is not happen
 				if (videoList.length == 1) restartWaitTimer();
@@ -584,8 +610,8 @@ class Main {
 				var index = videoList.findIndex(item -> item.url == url);
 				if (index == -1) return;
 
-				final isCurrent = videoList[itemPos].url == url;
-				itemPos = videoList.removeItem(index, itemPos);
+				final isCurrent = videoList.getCurrentItem().url == url;
+				videoList.removeItem(index);
 				if (isCurrent && videoList.length > 0) {
 					broadcast(data);
 					restartWaitTimer();
@@ -600,32 +626,41 @@ class Main {
 			case Pause:
 				if (videoList.length == 0) return;
 				if (!client.isLeader) return;
+				if (Math.abs(data.pause.time - videoTimer.getTime()) > FLASHBACK_DIST) {
+					saveFlashbackTime();
+				}
 				videoTimer.setTime(data.pause.time);
 				videoTimer.pause();
-				broadcast(data);
+				broadcast({
+					type: data.type,
+					pause: data.pause
+				});
 
 			case Play:
 				if (videoList.length == 0) return;
 				if (!client.isLeader) return;
+				if (Math.abs(data.play.time - videoTimer.getTime()) > FLASHBACK_DIST) {
+					saveFlashbackTime();
+				}
 				videoTimer.setTime(data.play.time);
 				videoTimer.play();
-				broadcast(data);
+				broadcast({
+					type: data.type,
+					play: data.play
+				});
 
 			case GetTime:
 				if (videoList.length == 0) return;
-				final maxTime = videoList[itemPos].duration - 0.01;
+				final maxTime = videoList.getCurrentItem().duration - 0.01;
 				if (videoTimer.getTime() > maxTime) {
 					videoTimer.pause();
 					videoTimer.setTime(maxTime);
-					final currentLength = videoList.length;
-					final currentPos = itemPos;
+					final skipUrl = videoList.getCurrentItem().url;
 					Timer.delay(() -> {
-						if (videoList.length != currentLength) return;
-						if (itemPos != currentPos) return;
 						skipVideo({
 							type: SkipVideo,
 							skipVideo: {
-								url: videoList[itemPos].url
+								url: skipUrl
 							}
 						});
 					}, VIDEO_SKIP_DELAY);
@@ -647,22 +682,46 @@ class Main {
 			case SetTime:
 				if (videoList.length == 0) return;
 				if (!client.isLeader) return;
+				if (Math.abs(data.setTime.time - videoTimer.getTime()) > FLASHBACK_DIST) {
+					saveFlashbackTime();
+				}
 				videoTimer.setTime(data.setTime.time);
-				broadcastExcept(client, data);
+				broadcastExcept(client, {
+					type: data.type,
+					setTime: data.setTime
+				});
 
 			case SetRate:
 				if (videoList.length == 0) return;
 				if (!client.isLeader) return;
 				videoTimer.setRate(data.setRate.rate);
-				broadcastExcept(client, data);
+				broadcastExcept(client, {
+					type: data.type,
+					setRate: data.setRate
+				});
 
 			case Rewind:
 				if (!checkPermission(client, RewindPerm)) return;
 				if (videoList.length == 0) return;
 				data.rewind.time += videoTimer.getTime();
 				if (data.rewind.time < 0) data.rewind.time = 0;
+				saveFlashbackTime();
 				videoTimer.setTime(data.rewind.time);
-				broadcast(data);
+				broadcast({
+					type: data.type,
+					rewind: data.rewind
+				});
+
+			case Flashback:
+				if (!checkPermission(client, RewindPerm)) return;
+				if (videoList.length == 0) return;
+				loadFlashbackTime();
+				broadcast({
+					type: Rewind,
+					rewind: {
+						time: videoTimer.getTime()
+					}
+				});
 
 			case SetLeader:
 				final clientName = data.setLeader.clientName;
@@ -692,15 +751,16 @@ class Main {
 
 			case PlayItem:
 				if (!checkPermission(client, ChangeOrderPerm)) return;
-				itemPos = data.playItem.pos;
+				videoList.setPos(data.playItem.pos);
+				data.playItem.pos = videoList.pos;
 				restartWaitTimer();
 				broadcast(data);
 
 			case SetNextItem:
 				if (!checkPermission(client, ChangeOrderPerm)) return;
 				final pos = data.setNextItem.pos;
-				if (pos == itemPos || pos == itemPos + 1) return;
-				itemPos = videoList.setNextItem(pos, itemPos);
+				if (pos == videoList.pos || pos == videoList.pos + 1) return;
+				videoList.setNextItem(pos);
 				broadcast(data);
 
 			case ToggleItemType:
@@ -716,21 +776,17 @@ class Main {
 			case ClearPlaylist:
 				if (!checkPermission(client, RemoveVideoPerm)) return;
 				videoTimer.stop();
-				videoList.resize(0);
-				itemPos = 0;
+				videoList.clear();
 				broadcast(data);
 
 			case ShufflePlaylist:
 				if (!checkPermission(client, ChangeOrderPerm)) return;
 				if (videoList.length == 0) return;
-				final current = videoList[itemPos];
-				videoList.remove(current);
-				Utils.shuffle(videoList);
-				videoList.insert(itemPos, current);
+				videoList.shuffle();
 				broadcast({
 					type: UpdatePlaylist,
 					updatePlaylist: {
-						videoList: videoList
+						videoList: videoList.getItems()
 					}
 				});
 
@@ -738,17 +794,40 @@ class Main {
 				broadcast({
 					type: UpdatePlaylist,
 					updatePlaylist: {
-						videoList: videoList
+						videoList: videoList.getItems()
 					}
 				});
 
 			case TogglePlaylistLock:
 				if (!checkPermission(client, LockPlaylistPerm)) return;
-				isPlaylistOpen = !isPlaylistOpen;
+				videoList.isOpen = !videoList.isOpen;
 				broadcast({
 					type: TogglePlaylistLock,
 					togglePlaylistLock: {
-						isOpen: isPlaylistOpen
+						isOpen: videoList.isOpen
+					}
+				});
+
+			case Dump:
+				if (!client.isAdmin) return;
+				final data = {
+					state: getCurrentState(),
+					clients: clients.map(client -> {
+						name: client.name,
+						id: client.id,
+						ip: clientIp(client.req),
+						isBanned: client.isBanned,
+						isAdmin: client.isAdmin,
+						isLeader: client.isLeader,
+						isUser: client.isUser,
+					}),
+					logs: logger.getLogs()
+				}
+				final json = Json.stringify(data, logger.filterNulls, "\t");
+				send(client, {
+					type: Dump,
+					dump: {
+						data: json
 					}
 				});
 		}
@@ -807,9 +886,9 @@ class Main {
 
 	function skipVideo(data:WsEvent):Void {
 		if (videoList.length == 0) return;
-		final item = videoList[itemPos];
+		final item = videoList.getCurrentItem();
 		if (item.url != data.skipVideo.url) return;
-		itemPos = videoList.skipItem(itemPos);
+		videoList.skipItem();
 		if (videoList.length > 0) restartWaitTimer();
 		broadcast(data);
 	}
@@ -864,6 +943,7 @@ class Main {
 	var loadedClientsCount = 0;
 
 	function restartWaitTimer():Void {
+		if (videoTimer.getTime() > FLASHBACK_DIST) saveFlashbackTime();
 		videoTimer.stop();
 		if (waitVideoStart != null) waitVideoStart.stop();
 		waitVideoStart = Timer.delay(startVideoPlayback, VIDEO_START_MAX_DELAY);
@@ -881,5 +961,19 @@ class Main {
 		loadedClientsCount = 0;
 		broadcast({type: VideoLoaded});
 		videoTimer.start();
+	}
+
+	var flashbackTime = 0.0;
+
+	function saveFlashbackTime() {
+		final time = videoTimer.getTime();
+		if (Math.abs(flashbackTime - time) < FLASHBACK_DIST) return;
+		flashbackTime = time;
+	}
+
+	function loadFlashbackTime() {
+		final time = videoTimer.getTime();
+		videoTimer.setTime(flashbackTime);
+		flashbackTime = time;
 	}
 }

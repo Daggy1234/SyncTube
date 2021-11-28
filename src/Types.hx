@@ -25,6 +25,7 @@ typedef Config = {
 	userVideoLimit:Int,
 	requestLeaderOnPause:Bool,
 	localAdmins:Bool,
+	allowProxyIps:Bool,
 	templateUrl:String,
 	youtubeApiKey:String,
 	youtubePlaylistLimit:Int,
@@ -142,6 +143,9 @@ typedef WsEvent = {
 		name:String,
 		time:Float
 	},
+	?kickClient:{
+		name:String,
+	},
 	?addVideo:{
 		item:VideoItem,
 		atEnd:Bool
@@ -189,6 +193,9 @@ typedef WsEvent = {
 	},
 	?togglePlaylistLock:{
 		isOpen:Bool
+	},
+	?dump:{
+		data:String
 	}
 }
 
@@ -205,6 +212,7 @@ enum abstract WsEventType(String) {
 	// var AddClient;
 	// var RemoveClient;
 	var BanClient;
+	var KickClient;
 	var AddVideo;
 	var RemoveVideo;
 	var SkipVideo;
@@ -215,6 +223,7 @@ enum abstract WsEventType(String) {
 	var SetTime;
 	var SetRate;
 	var Rewind;
+	var Flashback;
 	var SetLeader;
 	var PlayItem;
 	var SetNextItem;
@@ -224,4 +233,5 @@ enum abstract WsEventType(String) {
 	var ShufflePlaylist;
 	var UpdatePlaylist;
 	var TogglePlaylistLock;
+	var Dump;
 }

@@ -438,61 +438,68 @@ StringTools.hex = function(n,digits) {
 	}
 	return s;
 };
-var VideoList = {};
-VideoList._new = function() {
-	return [];
+var VideoList = function() {
+	this.items = [];
+	this.pos = 0;
 };
-VideoList.findIndex = function(this1,f) {
-	var i = 0;
-	var _g = 0;
-	while(_g < this1.length) {
-		if(f(this1[_g++])) {
-			return i;
+VideoList.__name__ = true;
+VideoList.prototype = {
+	setPos: function(i) {
+		if(i < 0 || i > this.items.length - 1) {
+			i = 0;
 		}
-		++i;
+		this.pos = i;
 	}
-	return -1;
-};
-VideoList.addItem = function(this1,item,atEnd,itemPos) {
-	if(atEnd) {
-		this1.push(item);
-	} else {
-		this1.splice(itemPos + 1,0,item);
+	,findIndex: function(f) {
+		var i = 0;
+		var _g = 0;
+		var _g1 = this.items;
+		while(_g < _g1.length) {
+			if(f(_g1[_g++])) {
+				return i;
+			}
+			++i;
+		}
+		return -1;
 	}
-};
-VideoList.setNextItem = function(this1,pos,itemPos) {
-	var next = this1[pos];
-	HxOverrides.remove(this1,next);
-	if(pos < itemPos) {
-		--itemPos;
+	,addItem: function(item,atEnd) {
+		if(atEnd) {
+			this.items.push(item);
+		} else {
+			this.items.splice(this.pos + 1,0,item);
+		}
 	}
-	this1.splice(itemPos + 1,0,next);
-	return itemPos;
-};
-VideoList.toggleItemType = function(this1,pos) {
-	this1[pos].isTemp = !this1[pos].isTemp;
-};
-VideoList.removeItem = function(this1,index,itemPos) {
-	if(index < itemPos) {
-		--itemPos;
+	,setNextItem: function(nextPos) {
+		var next = this.items[nextPos];
+		HxOverrides.remove(this.items,next);
+		if(nextPos < this.pos) {
+			this.pos--;
+		}
+		this.items.splice(this.pos + 1,0,next);
 	}
-	HxOverrides.remove(this1,this1[index]);
-	if(itemPos >= this1.length) {
-		itemPos = 0;
+	,toggleItemType: function(pos) {
+		this.items[pos].isTemp = !this.items[pos].isTemp;
 	}
-	return itemPos;
-};
-VideoList.skipItem = function(this1,itemPos) {
-	var item = this1[itemPos];
-	if(!item.isTemp) {
-		++itemPos;
-	} else {
-		HxOverrides.remove(this1,item);
+	,removeItem: function(index) {
+		if(index < this.pos) {
+			this.pos--;
+		}
+		HxOverrides.remove(this.items,this.items[index]);
+		if(this.pos >= this.items.length) {
+			this.pos = 0;
+		}
 	}
-	if(itemPos >= this1.length) {
-		itemPos = 0;
+	,skipItem: function() {
+		var item = this.items[this.pos];
+		if(!item.isTemp) {
+			this.pos++;
+		} else {
+			HxOverrides.remove(this.items,item);
+		}
+		if(this.pos >= this.items.length) {
+			this.pos = 0;
+		}
 	}
-	return itemPos;
 };
 var client_Buttons = function() { };
 client_Buttons.__name__ = true;
@@ -772,12 +779,7 @@ client_Buttons.initHotkeys = function(main,player) {
 		if(!client_Buttons.settings.hotkeysEnabled) {
 			return;
 		}
-		var target = e.target;
-		if(target.isContentEditable) {
-			return;
-		}
-		var tagName = target.tagName;
-		if(tagName == "INPUT" || tagName == "TEXTAREA") {
+		if(client_Buttons.isElementEditable(e.target)) {
 			return;
 		}
 		var key = e.keyCode;
@@ -819,6 +821,19 @@ client_Buttons.initHotkeys = function(main,player) {
 		e.preventDefault();
 	};
 };
+client_Buttons.isElementEditable = function(target) {
+	if(target == null) {
+		return false;
+	}
+	if(target.isContentEditable) {
+		return true;
+	}
+	var tagName = target.tagName;
+	if(tagName == "INPUT" || tagName == "TEXTAREA") {
+		return true;
+	}
+	return false;
+};
 client_Buttons.updateSynchThresholdBtn = function() {
 	var tmp = "" + Lang.get("synchThreshold") + ": " + client_Buttons.settings.synchThreshold;
 	window.document.querySelector("#synchThresholdBtn").innerText = tmp + "s";
@@ -833,6 +848,9 @@ client_Buttons.initChatInput = function(main) {
 	guestName.onkeydown = function(e) {
 		if(e.keyCode == 13) {
 			main.guestLogin(guestName.value);
+			if(client_Utils.isTouch()) {
+				guestName.blur();
+			}
 		}
 	};
 	var guestPass = window.document.querySelector("#guestpass");
@@ -840,12 +858,44 @@ client_Buttons.initChatInput = function(main) {
 		if(e.keyCode == 13) {
 			main.userLogin(guestName.value,guestPass.value);
 			guestPass.value = "";
+			if(client_Utils.isTouch()) {
+				guestPass.blur();
+			}
 		}
 	};
+	if(client_Utils.isIOS()) {
+		window.document.ontouchmove = function(e) {
+			return e.preventDefault();
+		};
+		window.document.body.style.height = "-webkit-fill-available";
+		window.document.querySelector("#chat").style.height = "-webkit-fill-available";
+	}
 	var chatline = window.document.querySelector("#chatline");
 	chatline.onfocus = function(e) {
-		if(client_Utils.isTouch()) {
+		if(client_Utils.isIOS()) {
+			var startY = window.scrollY;
+			haxe_Timer.delay(function() {
+				window.scrollBy(0,-(window.scrollY - startY));
+				window.document.querySelector("#video").scrollTop = 0;
+				main.scrollChatToEnd();
+				if(window.visualViewport == null) {
+					var tmp = "" + Std.string(window.innerHeight);
+					window.document.querySelector("#chat").style.height = tmp + "px";
+				}
+			},100);
+		} else if(client_Utils.isTouch()) {
 			main.scrollChatToEnd();
+		}
+	};
+	if(client_Utils.isIOS() && window.visualViewport != null) {
+		window.visualViewport.addEventListener("resize",function(e) {
+			var tmp = "" + Std.string(window.innerHeight);
+			return window.document.querySelector("#chat").style.height = tmp + "px";
+		});
+	}
+	chatline.onblur = function(e) {
+		if(client_Utils.isIOS() && window.visualViewport == null) {
+			window.document.querySelector("#chat").style.height = "-webkit-fill-available";
 		}
 	};
 	new client_InputWithHistory(chatline,null,50,function(value) {
@@ -853,6 +903,9 @@ client_Buttons.initChatInput = function(main) {
 			return true;
 		}
 		main.send({ type : "Message", message : { clientName : "", text : value}});
+		if(client_Utils.isTouch()) {
+			chatline.blur();
+		}
 		return true;
 	});
 };
@@ -982,10 +1035,10 @@ client_JsApi.hasScriptInHead = $hx_exports["client"]["JsApi"]["hasScriptInHead"]
 	return false;
 };
 client_JsApi.getVideoItems = $hx_exports["client"]["JsApi"]["getVideoItems"] = function() {
+	var items = client_JsApi.player.getItems();
 	var _g = [];
 	var _g1 = 0;
-	var _g2 = client_JsApi.player.getItems();
-	while(_g1 < _g2.length) _g.push(Reflect.copy(_g2[_g1++]));
+	while(_g1 < items.length) _g.push(Reflect.copy(items[_g1++]));
 	return _g;
 };
 client_JsApi.addVideoItem = $hx_exports["client"]["JsApi"]["addVideoItem"] = function(url,atEnd,isTemp,callback) {
@@ -1068,6 +1121,7 @@ client_JsApi.fireVideoRemoveEvents = function(item) {
 var client_Main = function() {
 	this.matchSimpleDate = new EReg("^-?([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s?)?$","");
 	this.mask = new EReg("\\${([0-9]+)-([0-9]+)}","g");
+	this.disabledReconnection = false;
 	this.isConnected = false;
 	this.personal = new Client("Unknown",0);
 	this.filters = [];
@@ -1104,6 +1158,41 @@ var client_Main = function() {
 client_Main.__name__ = true;
 client_Main.main = function() {
 	new client_Main();
+};
+client_Main.serverMessage = function(type,text,isText) {
+	if(isText == null) {
+		isText = true;
+	}
+	var msgBuf = window.document.querySelector("#messagebuffer");
+	var div = window.document.createElement("div");
+	var time = HxOverrides.dateStr(new Date()).split(" ")[1];
+	switch(type) {
+	case 1:
+		div.className = "server-msg-reconnect";
+		div.textContent = Lang.get("msgConnected");
+		break;
+	case 2:
+		div.className = "server-msg-disconnect";
+		div.textContent = Lang.get("msgDisconnected");
+		break;
+	case 3:
+		div.className = "server-whisper";
+		div.textContent = time + text + " " + Lang.get("entered");
+		break;
+	case 4:
+		div.className = "server-whisper";
+		div.innerHTML = "<div class=\"head\">\n\t\t\t\t\t<div class=\"server-whisper\"></div>\n\t\t\t\t\t<span class=\"timestamp\">" + time + "</span>\n\t\t\t\t</div>";
+		var textDiv = div.querySelector(".server-whisper");
+		if(isText) {
+			textDiv.textContent = text;
+		} else {
+			textDiv.innerHTML = text;
+		}
+		break;
+	default:
+	}
+	msgBuf.appendChild(div);
+	msgBuf.scrollTop = msgBuf.scrollHeight;
 };
 client_Main.prototype = {
 	settingsPatcher: function(data,version) {
@@ -1142,16 +1231,19 @@ client_Main.prototype = {
 		this.ws = new WebSocket("" + protocol + "//" + this.host + colonPort + path);
 		this.ws.onmessage = $bind(this,this.onMessage);
 		this.ws.onopen = function() {
-			_gthis.serverMessage(1);
+			client_Main.serverMessage(1);
 			return _gthis.isConnected = true;
 		};
 		this.ws.onclose = function() {
 			if(_gthis.isConnected) {
-				_gthis.serverMessage(2);
+				client_Main.serverMessage(2);
 			}
 			_gthis.isConnected = false;
 			_gthis.player.pause();
-			return haxe_Timer.delay($bind(_gthis,_gthis.openWebSocket),2000);
+			if(_gthis.disabledReconnection) {
+				return;
+			}
+			haxe_Timer.delay($bind(_gthis,_gthis.openWebSocket),2000);
 		};
 	}
 	,initListeners: function() {
@@ -1293,7 +1385,7 @@ client_Main.prototype = {
 		}
 		this.player.getVideoData({ url : url, atEnd : atEnd},function(data) {
 			if(data.duration == 0) {
-				_gthis.serverMessage(4,Lang.get("addVideoError"));
+				client_Main.serverMessage(4,Lang.get("addVideoError"));
 				return;
 			}
 			if(data.title == null) {
@@ -1322,7 +1414,7 @@ client_Main.prototype = {
 		var isTemp = window.document.querySelector("#customembed").querySelector(".add-temp").checked;
 		this.player.getIframeData({ url : iframe, atEnd : atEnd},function(data) {
 			if(data.duration == 0) {
-				_gthis.serverMessage(4,Lang.get("addVideoError"));
+				client_Main.serverMessage(4,Lang.get("addVideoError"));
 				return;
 			}
 			if(title.length > 0) {
@@ -1355,10 +1447,10 @@ client_Main.prototype = {
 		this.player.refresh();
 	}
 	,getPlaylistLinks: function() {
+		var items = this.player.getItems();
 		var _g = [];
 		var _g1 = 0;
-		var _g2 = this.player.getItems();
-		while(_g1 < _g2.length) _g.push(_g2[_g1++].url);
+		while(_g1 < items.length) _g.push(items[_g1++].url);
 		return _g;
 	}
 	,tryLocalIp: function(url) {
@@ -1371,7 +1463,7 @@ client_Main.prototype = {
 		var data = JSON.parse(e.data);
 		if(this.config != null && this.config.isVerbose) {
 			var t = data.type;
-			haxe_Log.trace("Event: " + data.type,{ fileName : "src/client/Main.hx", lineNumber : 378, className : "client.Main", methodName : "onMessage", customParams : [Reflect.field(data,t.charAt(0).toLowerCase() + HxOverrides.substr(t,1,null))]});
+			haxe_Log.trace("Event: " + data.type,{ fileName : "src/client/Main.hx", lineNumber : 380, className : "client.Main", methodName : "onMessage", customParams : [Reflect.field(data,t.charAt(0).toLowerCase() + HxOverrides.substr(t,1,null))]});
 		}
 		client_JsApi.fireOnceEvent(data);
 		switch(data.type) {
@@ -1397,6 +1489,11 @@ client_Main.prototype = {
 			this.onTimeGet.run();
 			break;
 		case "Disconnected":
+			break;
+		case "Dump":
+			client_Utils.saveFile("dump.json","application/json",data.dump.data);
+			break;
+		case "Flashback":
 			break;
 		case "GetTime":
 			if(data.getTime.paused == null) {
@@ -1434,6 +1531,10 @@ client_Main.prototype = {
 				return;
 			}
 			this.player.setTime(newTime);
+			break;
+		case "KickClient":
+			this.disabledReconnection = true;
+			this.ws.close();
 			break;
 		case "Login":
 			this.onLogin(data.login.clients,data.login.clientName);
@@ -1493,7 +1594,7 @@ client_Main.prototype = {
 			break;
 		case "ServerMessage":
 			var id = data.serverMessage.textId;
-			this.serverMessage(4,id == "usernameError" ? StringTools.replace(Lang.get(id),"$MAX","" + this.config.maxLoginLength) : Lang.get(id));
+			client_Main.serverMessage(4,id == "usernameError" ? StringTools.replace(Lang.get(id),"$MAX","" + this.config.maxLoginLength) : Lang.get(id));
 			break;
 		case "SetLeader":
 			ClientTools.setLeader(this.clients,data.setLeader.clientName);
@@ -1579,7 +1680,7 @@ client_Main.prototype = {
 		this.setLeaderButton((this.personal.group & 4) != 0);
 		this.setPlaylistLock(connected.isPlaylistOpen);
 		this.clearChat();
-		this.serverMessage(1);
+		client_Main.serverMessage(1);
 		var _g = 0;
 		var _g1 = connected.history;
 		while(_g < _g1.length) {
@@ -1718,41 +1819,6 @@ client_Main.prototype = {
 		}
 		this.ws.send(JSON.stringify(data));
 	}
-	,serverMessage: function(type,text,isText) {
-		if(isText == null) {
-			isText = true;
-		}
-		var msgBuf = window.document.querySelector("#messagebuffer");
-		var div = window.document.createElement("div");
-		var time = HxOverrides.dateStr(new Date()).split(" ")[1];
-		switch(type) {
-		case 1:
-			div.className = "server-msg-reconnect";
-			div.textContent = Lang.get("msgConnected");
-			break;
-		case 2:
-			div.className = "server-msg-disconnect";
-			div.textContent = Lang.get("msgDisconnected");
-			break;
-		case 3:
-			div.className = "server-whisper";
-			div.textContent = time + text + " " + Lang.get("entered");
-			break;
-		case 4:
-			div.className = "server-whisper";
-			div.innerHTML = "<div class=\"head\">\n\t\t\t\t\t<div class=\"server-whisper\"></div>\n\t\t\t\t\t<span class=\"timestamp\">" + time + "</span>\n\t\t\t\t</div>";
-			var textDiv = div.querySelector(".server-whisper");
-			if(isText) {
-				textDiv.textContent = text;
-			} else {
-				textDiv.innerHTML = text;
-			}
-			break;
-		default:
-		}
-		msgBuf.appendChild(div);
-		msgBuf.scrollTop = msgBuf.scrollHeight;
-	}
 	,updateUserList: function() {
 		window.document.querySelector("#usercount").textContent = this.clients.length + " " + Lang.get("online");
 		window.document.title = this.getPageTitle();
@@ -1859,6 +1925,7 @@ client_Main.prototype = {
 		command = HxOverrides.substr(args.shift(),1,null);
 		switch(command) {
 		case "ban":
+			this.mergeRedundantArgs(args,0,2);
 			var name = args[0];
 			var time = this.parseSimpleDate(args[1]);
 			if(time < 0) {
@@ -1869,7 +1936,18 @@ client_Main.prototype = {
 		case "clear":
 			this.send({ type : "ClearChat"});
 			return true;
+		case "dump":
+			this.send({ type : "Dump"});
+			return true;
+		case "fb":case "flashback":
+			this.send({ type : "Flashback"});
+			return false;
+		case "kick":
+			this.mergeRedundantArgs(args,0,1);
+			this.send({ type : "KickClient", kickClient : { name : args[0]}});
+			return true;
 		case "removeBan":case "unban":
+			this.mergeRedundantArgs(args,0,1);
 			this.send({ type : "BanClient", banClient : { name : args[0], time : 0}});
 			return true;
 		}
@@ -1915,6 +1993,14 @@ client_Main.prototype = {
 			return Std.parseInt(HxOverrides.substr(block,0,block.length - 1)) * 60 * 60 * 24;
 		}
 		return Std.parseInt(block);
+	}
+	,mergeRedundantArgs: function(args,pos,newLength) {
+		var count = args.length - (newLength - 1);
+		if(count < 2) {
+			return;
+		}
+		var x = args.splice(pos,count).join(" ");
+		args.splice(pos,0,x);
 	}
 	,blinkTabWithTitle: function(title) {
 		var _gthis = this;
@@ -2000,10 +2086,9 @@ var client_Player = function(main) {
 	this.skipSetRate = false;
 	this.skipSetTime = false;
 	this.isLoaded = false;
-	this.itemPos = 0;
 	this.playerEl = window.document.querySelector("#ytapiplayer");
 	this.videoItemsEl = window.document.querySelector("#queue");
-	this.items = VideoList._new();
+	this.videoList = new VideoList();
 	this.main = main;
 	this.players = [new client_players_Youtube(main,this)];
 	this.iframePlayer = new client_players_Iframe(main,this);
@@ -2033,19 +2118,20 @@ client_Player.prototype = {
 		};
 	}
 	,setNextItem: function(pos) {
-		this.itemPos = VideoList.setNextItem(this.items,pos,this.itemPos);
+		this.videoList.setNextItem(pos);
 		var next = this.videoItemsEl.children[pos];
 		this.videoItemsEl.removeChild(next);
-		client_Utils.insertAtIndex(this.videoItemsEl,next,this.itemPos + 1);
+		client_Utils.insertAtIndex(this.videoItemsEl,next,this.videoList.pos + 1);
 	}
 	,toggleItemType: function(pos) {
-		VideoList.toggleItemType(this.items,pos);
-		this.setItemElementType(this.videoItemsEl.children[pos],this.items[pos].isTemp);
+		this.videoList.toggleItemType(pos);
+		this.setItemElementType(this.videoItemsEl.children[pos],this.videoList.items[this.videoList.pos].isTemp);
 	}
 	,setPlayer: function(newPlayer) {
 		if(this.player != newPlayer) {
 			if(this.player != null) {
-				client_JsApi.fireVideoRemoveEvents(this.items[this.itemPos]);
+				var _this = this.videoList;
+				client_JsApi.fireVideoRemoveEvents(_this.items[_this.pos]);
 				this.player.removeVideo();
 			}
 			this.main.blinkTabWithTitle("*Video*");
@@ -2073,7 +2159,7 @@ client_Player.prototype = {
 		if(!this.main.isSyncActive) {
 			return;
 		}
-		var item = this.items[i];
+		var item = this.videoList.items[i];
 		var currentPlayer = Lambda.find(this.players,function(p) {
 			return p.isSupportedLink(item.url);
 		});
@@ -2084,12 +2170,9 @@ client_Player.prototype = {
 		} else {
 			this.setPlayer(this.rawPlayer);
 		}
-		var childs = this.videoItemsEl.children;
-		if(childs[this.itemPos] != null) {
-			childs[this.itemPos].classList.remove("queue_active");
-		}
-		this.itemPos = i;
-		childs[this.itemPos].classList.add("queue_active");
+		this.removeActiveLabel(this.videoList.pos);
+		this.videoList.setPos(i);
+		this.addActiveLabel(this.videoList.pos);
 		this.isLoaded = false;
 		this.player.loadVideo(item);
 		client_JsApi.fireVideoChangeEvents(item);
@@ -2099,14 +2182,16 @@ client_Player.prototype = {
 		if(this.player == null) {
 			return;
 		}
-		var item = this.items[this.itemPos];
+		var _this = this.videoList;
+		var item = _this.items[_this.pos];
 		if(item == null) {
 			return;
 		}
 		this.player.loadVideo({ url : src, title : item.title, author : item.author, duration : item.duration, subs : item.subs, isTemp : item.isTemp, isIframe : item.isIframe});
 	}
 	,removeVideo: function() {
-		client_JsApi.fireVideoRemoveEvents(this.items[this.itemPos]);
+		var _this = this.videoList;
+		client_JsApi.fireVideoRemoveEvents(_this.items[_this.pos]);
 		this.player.removeVideo();
 		window.document.querySelector("#currenttitle").textContent = Lang.get("nothingPlaying");
 		this.setPauseIndicator(true);
@@ -2133,7 +2218,7 @@ client_Player.prototype = {
 			return;
 		}
 		this.main.send({ type : "Play", play : { time : this.getTime()}});
-		if(this.main.hasLeaderOnPauseRequest()) {
+		if(this.main.hasLeaderOnPauseRequest() && this.videoList.items.length > 0) {
 			if(this.main.hasPermission((this.main.personal.group & 8) != 0 ? ClientGroup.Admin : ClientGroup.User,"requestLeader")) {
 				this.main.toggleLeader();
 			}
@@ -2141,7 +2226,7 @@ client_Player.prototype = {
 	}
 	,onPause: function() {
 		var _gthis = this;
-		if(this.main.hasLeaderOnPauseRequest() && this.getTime() != 0 && !this.main.hasLeader()) {
+		if(this.main.hasLeaderOnPauseRequest() && this.videoList.items.length > 0 && this.getTime() > 1 && !this.main.hasLeader()) {
 			client_JsApi.once("SetLeader",function(event) {
 				if(event.setLeader.clientName != _gthis.main.personal.name) {
 					return;
@@ -2181,12 +2266,12 @@ client_Player.prototype = {
 		var url = StringTools.htmlEscape(item.url,true);
 		var duration = item.isIframe ? "" : this.duration(item.duration);
 		var itemEl = client_Utils.nodeFromString("<li class=\"queue_entry info\" title=\"" + Lang.get("addedBy") + ": " + item.author + "\">\n\t\t\t\t<header>\n\t\t\t\t\t<span class=\"qe_time\">" + duration + "</span>\n\t\t\t\t\t<h4><a class=\"qe_title\" href=\"" + url + "\" target=\"_blank\">" + StringTools.htmlEscape(item.title) + "</a></h4>\n\t\t\t\t</header>\n\t\t\t\t<span class=\"controls\">\n\t\t\t\t\t<button class=\"qbtn-play\" title=\"" + Lang.get("play") + "\"><ion-icon name=\"play\"></ion-icon></button>\n\t\t\t\t\t<button class=\"qbtn-next\" title=\"" + Lang.get("setNext") + "\"><ion-icon name=\"arrow-up\"></ion-icon></button>\n\t\t\t\t\t<button class=\"qbtn-tmp\"><ion-icon></ion-icon></button>\n\t\t\t\t\t<button class=\"qbtn-delete\" title=\"" + Lang.get("delete") + "\"><ion-icon name=\"close\"></ion-icon></button>\n\t\t\t\t</span>\n\t\t\t</li>");
-		VideoList.addItem(this.items,item,atEnd,this.itemPos);
+		this.videoList.addItem(item,atEnd);
 		this.setItemElementType(itemEl,item.isTemp);
 		if(atEnd) {
 			this.videoItemsEl.appendChild(itemEl);
 		} else {
-			client_Utils.insertAtIndex(this.videoItemsEl,itemEl,this.itemPos + 1);
+			client_Utils.insertAtIndex(this.videoItemsEl,itemEl,this.videoList.pos + 1);
 		}
 		this.updateCounters();
 	}
@@ -2202,17 +2287,18 @@ client_Player.prototype = {
 	}
 	,removeItem: function(url) {
 		this.removeElementItem(url);
-		var index = VideoList.findIndex(this.items,function(item) {
+		var index = this.videoList.findIndex(function(item) {
 			return item.url == url;
 		});
 		if(index == -1) {
 			return;
 		}
-		var isCurrent = this.items[this.itemPos].url == url;
-		this.itemPos = VideoList.removeItem(this.items,index,this.itemPos);
+		var _this = this.videoList;
+		var isCurrent = _this.items[_this.pos].url == url;
+		this.videoList.removeItem(index);
 		this.updateCounters();
-		if(isCurrent && this.items.length > 0) {
-			this.setVideo(this.itemPos);
+		if(isCurrent && this.videoList.items.length > 0) {
+			this.setVideo(this.videoList.pos);
 		}
 	}
 	,removeElementItem: function(url) {
@@ -2228,60 +2314,84 @@ client_Player.prototype = {
 		}
 	}
 	,skipItem: function(url) {
-		var index = VideoList.findIndex(this.items,function(item) {
+		var pos = this.videoList.findIndex(function(item) {
 			return item.url == url;
 		});
-		if(index == -1) {
+		if(pos == -1) {
 			return;
 		}
-		if(this.items[index].isTemp) {
+		this.removeActiveLabel(this.videoList.pos);
+		this.videoList.setPos(pos);
+		var _this = this.videoList;
+		if(_this.items[_this.pos].isTemp) {
 			this.removeElementItem(url);
 		}
-		index = VideoList.skipItem(this.items,index);
+		this.videoList.skipItem();
 		this.updateCounters();
-		if(this.items.length == 0) {
+		if(this.videoList.items.length == 0) {
 			return;
 		}
-		this.setVideo(index);
+		this.setVideo(this.videoList.pos);
+	}
+	,addActiveLabel: function(pos) {
+		var childs = this.videoItemsEl.children;
+		if(childs[this.videoList.pos] != null) {
+			childs[this.videoList.pos].classList.add("queue_active");
+		}
+	}
+	,removeActiveLabel: function(pos) {
+		var childs = this.videoItemsEl.children;
+		if(childs[this.videoList.pos] != null) {
+			childs[this.videoList.pos].classList.remove("queue_active");
+		}
 	}
 	,updateCounters: function() {
-		var tmp = "" + this.items.length + " ";
+		var tmp = "" + this.videoList.items.length + " ";
 		var tmp1 = Lang.get("videos");
 		window.document.querySelector("#plcount").textContent = tmp + tmp1;
 		window.document.querySelector("#pllength").textContent = this.totalDuration();
 	}
 	,getItems: function() {
-		return this.items;
+		return this.videoList.items;
 	}
 	,setItems: function(list,pos) {
-		var currentUrl = this.itemPos >= this.items.length ? "" : this.items[this.itemPos].url;
-		this.clearItems();
-		if(pos != null) {
-			this.itemPos = pos;
+		var currentUrl;
+		if(this.videoList.pos >= this.videoList.items.length) {
+			currentUrl = "";
+		} else {
+			var _this = this.videoList;
+			currentUrl = _this.items[_this.pos].url;
 		}
+		this.clearItems();
 		if(list.length == 0) {
 			return;
 		}
 		var _g = 0;
 		while(_g < list.length) this.addVideoItem(list[_g++],true);
-		if(currentUrl != this.items[this.itemPos].url) {
-			this.setVideo(this.itemPos);
+		if(pos != null) {
+			this.videoList.setPos(pos);
+		}
+		var _this = this.videoList;
+		if(currentUrl != _this.items[_this.pos].url) {
+			this.setVideo(this.videoList.pos);
 		} else {
-			this.videoItemsEl.children[this.itemPos].classList.add("queue_active");
+			this.addActiveLabel(this.videoList.pos);
 		}
 	}
 	,clearItems: function() {
-		this.items.length = 0;
+		var _this = this.videoList;
+		_this.items.length = 0;
+		_this.pos = 0;
 		this.videoItemsEl.textContent = "";
 		this.updateCounters();
 	}
 	,refresh: function() {
-		if(this.items.length == 0) {
+		if(this.videoList.items.length == 0) {
 			return;
 		}
 		var time = this.getTime();
 		this.removeVideo();
-		this.setVideo(this.itemPos);
+		this.setVideo(this.videoList.pos);
 		if((this.main.personal.group & 4) != 0) {
 			this.setTime(time);
 			this.main.forceSyncNextTick = true;
@@ -2307,7 +2417,7 @@ client_Player.prototype = {
 	,totalDuration: function() {
 		var time = 0.0;
 		var _g = 0;
-		var _g1 = this.items;
+		var _g1 = this.videoList.items;
 		while(_g < _g1.length) {
 			var item = _g1[_g];
 			++_g;
@@ -2319,22 +2429,23 @@ client_Player.prototype = {
 		return this.duration(time);
 	}
 	,isListEmpty: function() {
-		return this.items.length == 0;
+		return this.videoList.items.length == 0;
 	}
 	,itemsLength: function() {
-		return this.items.length;
+		return this.videoList.items.length;
 	}
 	,getItemPos: function() {
-		return this.itemPos;
+		return this.videoList.pos;
 	}
 	,hasVideo: function() {
 		return this.playerEl.children.length != 0;
 	}
 	,getDuration: function() {
-		if(this.itemPos >= this.items.length) {
+		if(this.videoList.pos >= this.videoList.items.length) {
 			return 0;
 		}
-		return this.items[this.itemPos].duration;
+		var _this = this.videoList;
+		return _this.items[_this.pos].duration;
 	}
 	,isVideoLoaded: function() {
 		return this.player.isVideoLoaded();
@@ -2462,6 +2573,17 @@ client_Utils.__name__ = true;
 client_Utils.isTouch = function() {
 	return 'ontouchstart' in window;
 };
+client_Utils.isIOS = function() {
+	if(!new EReg("^(iPhone|iPad|iPod)","").match($global.navigator.platform)) {
+		if(new EReg("^Mac","").match($global.navigator.platform)) {
+			return $global.navigator.maxTouchPoints > 4;
+		} else {
+			return false;
+		}
+	} else {
+		return true;
+	}
+};
 client_Utils.nodeFromString = function(div) {
 	var wrapper = window.document.createElement("div");
 	wrapper.innerHTML = div;
@@ -2558,6 +2680,21 @@ client_Utils.browseFileUrl = function(onFileLoad,isBinary,revoke) {
 	};
 	window.document.body.appendChild(input);
 	input.click();
+};
+client_Utils.saveFile = function(name,mime,data) {
+	var blob = new Blob([data],{ type : mime});
+	var url = URL.createObjectURL(blob);
+	var a = window.document.createElement("a");
+	a.download = name;
+	a.href = url;
+	a.onclick = function(e) {
+		e.cancelBubble = true;
+		e.stopPropagation();
+	};
+	window.document.body.appendChild(a);
+	a.click();
+	window.document.body.removeChild(a);
+	URL.revokeObjectURL(url);
 };
 var client_players_Iframe = function(main,player) {
 	this.playerEl = window.document.querySelector("#ytapiplayer");
@@ -2730,6 +2867,7 @@ client_players_Raw.prototype = {
 		} else {
 			this.video = window.document.createElement("video");
 			this.video.id = "videoplayer";
+			this.video.setAttribute("playsinline","");
 			this.video.src = url;
 			this.video.oncanplaythrough = ($_=this.player,$bind($_,$_.onCanBePlayed));
 			this.video.onseeking = ($_=this.player,$bind($_,$_.onSetTime));
@@ -2757,6 +2895,9 @@ client_players_Raw.prototype = {
 			this.controlsHider.stop();
 		}
 		this.controlsHider = haxe_Timer.delay(function() {
+			if(_gthis.video == null) {
+				return;
+			}
 			_gthis.video.controls = false;
 		},3000);
 		this.video.onmousemove = function(e) {
@@ -2821,6 +2962,10 @@ client_players_RawSubs.loadSubs = function(item,video) {
 	}
 	var url = encodeURI(item.subs);
 	if(!StringTools.startsWith(url,"/")) {
+		var protocol = $global.location.protocol;
+		if(!StringTools.startsWith(url,"http")) {
+			url = "" + protocol + "//" + url;
+		}
 		url = "/proxy?url=" + url;
 	}
 	switch(ext) {
@@ -2839,6 +2984,9 @@ client_players_RawSubs.parseSrt = function(video,url) {
 	window.fetch(url).then(function(response) {
 		return response.text();
 	}).then(function(text) {
+		if(client_players_RawSubs.isProxyError(text)) {
+			return;
+		}
 		var subs = [];
 		var blocks = StringTools.replace(text,"\r\n","\n").split("\n\n");
 		var _g = 0;
@@ -2870,6 +3018,9 @@ client_players_RawSubs.parseAss = function(video,url) {
 	window.fetch(url).then(function(response) {
 		return response.text();
 	}).then(function(text) {
+		if(client_players_RawSubs.isProxyError(text)) {
+			return;
+		}
 		var subs = [];
 		var lines = StringTools.replace(text,"\r\n","\n").split("\n");
 		var matchFormat = new EReg("^Format:","");
@@ -2960,12 +3111,20 @@ client_players_RawSubs.convertAssTime = function(time) {
 	var ms = Std.parseInt(client_players_RawSubs.assTimeStamp.matched(4)) * 10;
 	return "" + StringTools.lpad("" + h,"0",2) + ":" + StringTools.lpad("" + m,"0",2) + ":" + StringTools.lpad("" + s,"0",2) + "." + HxOverrides.substr(StringTools.lpad("" + ms,"0",3),0,3);
 };
+client_players_RawSubs.isProxyError = function(text) {
+	if(StringTools.startsWith(text,"Proxy error:")) {
+		client_Main.serverMessage(4,"Failed to add subs: proxy error");
+		haxe_Log.trace("Failed to add subs: " + text,{ fileName : "src/client/players/RawSubs.hx", lineNumber : 191, className : "client.players.RawSubs", methodName : "isProxyError"});
+		return true;
+	}
+	return false;
+};
 client_players_RawSubs.onParsed = function(video,name,dataUrl) {
 	var trackEl = window.document.createElement("track");
+	trackEl.kind = "captions";
 	trackEl.label = name;
-	trackEl.kind = "subtitles";
+	trackEl.srclang = "en";
 	trackEl.src = dataUrl;
-	trackEl.default = true;
 	video.appendChild(trackEl);
 	trackEl.track.mode = "showing";
 };
@@ -3120,7 +3279,7 @@ client_players_Youtube.prototype = {
 		loadJson(dataUrl);
 	}
 	,youtubeApiError: function(error) {
-		this.main.serverMessage(4,"Error " + error.code + ": " + error.message,false);
+		client_Main.serverMessage(4,"Error " + error.code + ": " + error.message,false);
 	}
 	,getRemoteDataFallback: function(url,callback) {
 		var _gthis = this;
@@ -3162,7 +3321,7 @@ client_players_Youtube.prototype = {
 		this.video = window.document.createElement("div");
 		this.video.id = "videoplayer";
 		this.playerEl.appendChild(this.video);
-		this.youtube = new YT.Player(this.video.id,{ videoId : this.extractVideoId(item.url), playerVars : { autoplay : 1, modestbranding : 1, rel : 0, showinfo : 0}, events : { onReady : function(e) {
+		this.youtube = new YT.Player(this.video.id,{ videoId : this.extractVideoId(item.url), playerVars : { autoplay : 1, playsinline : 1, modestbranding : 1, rel : 0, showinfo : 0}, events : { onReady : function(e) {
 			_gthis.isLoaded = true;
 			_gthis.youtube.pauseVideo();
 		}, onStateChange : function(e) {
