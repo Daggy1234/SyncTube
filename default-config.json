@@ -14,10 +14,10 @@
 	"youtubePlaylistLimit": 50,
 	"permissions": {
 		"banned": [],
-		"guest": ["writeChat", "addVideo", "removeVideo", "changeOrder", "requestLeader", "rewind"],
+		"guest": ["writeChat"],
 		"user": ["guest"],
-		"leader": ["user"],
-		"admin": ["user", "clearChat", "setLeader", "lockPlaylist", "banClient"]
+		"leader": ["user", "addVideo", "removeVideo", "changeOrder", "requestLeader", "rewind"],
+		"admin": ["leader", "clearChat", "setLeader", "lockPlaylist", "banClient"]
 	},
 	"emotes": [
 		{"name": ":adorable:", "image": "https://i.imgur.com/5GxNwDY.png"},
