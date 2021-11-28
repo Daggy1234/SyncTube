@@ -1,21 +1,11 @@
-FROM frolvlad/alpine-glibc
-WORKDIR /usr/src/app
+FROM node:alpine
 
-RUN apk add nodejs npm git; \
-    npm install --global lix; \
-    lix install haxe 4.2.2 --global
-
+COPY build ./build
 COPY res ./res
-COPY src ./src
-COPY user ./user
-COPY build-*.hxml ./
-COPY package*.json ./
+COPY package.json ./
 COPY default-config.json ./
-
-RUN npm ci; \
-    haxelib install all --always; \
-    haxe build-all.hxml
-
 EXPOSE 4200
+
+RUN npm install ws
 
 CMD npm start
