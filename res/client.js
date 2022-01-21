@@ -1530,7 +1530,11 @@ client_Main.prototype = {
 			if(Math.abs(time - newTime) < synchThreshold) {
 				return;
 			}
-			this.player.setTime(newTime);
+			if(!data.getTime.paused) {
+				this.player.setTime(newTime + 0.5);
+			} else {
+				this.player.setTime(newTime);
+			}
 			break;
 		case "KickClient":
 			this.disabledReconnection = true;
@@ -1590,7 +1594,7 @@ client_Main.prototype = {
 			}
 			break;
 		case "Rewind":
-			this.player.setTime(data.rewind.time);
+			this.player.setTime(data.rewind.time + 0.5);
 			break;
 		case "ServerMessage":
 			var id = data.serverMessage.textId;
@@ -1733,6 +1737,9 @@ client_Main.prototype = {
 	}
 	,setConfig: function(config) {
 		this.config = config;
+		if(client_Utils.isTouch()) {
+			config.requestLeaderOnPause = false;
+		}
 		this.pageTitle = config.channelName;
 		window.document.querySelector("#guestname").maxLength = config.maxLoginLength;
 		window.document.querySelector("#chatline").maxLength = config.maxMessageLength;
